@@ -422,7 +422,8 @@ def predict_and_generate_submission():
     df = pd.DataFrame(resultats)
     df = df[["image_name", "left_digits", "letter_ar", "right_digits"]]
     
-    df.to_csv("submission.csv", index=False, encoding='utf-8-sig')
+    # Important : utf-8 pur est préféré pour l'évaluation automatique (évite les caractères BOM de utf-8-sig)
+    df.to_csv("submission.csv", index=False, encoding='utf-8')
     print(f"\n🏆 submission.csv sauvegardé avec succès au format (left_digits, letter_ar, right_digits) !")
     print(df.head().to_string(index=False)) # Affiche seulement les 5 premières lignes
 
@@ -442,7 +443,7 @@ def main():
     
     # 2. Entraînement du modèle
     # Décommentez la ligne si vous souhaitez relancer l'entraînement
-    train_model()
+    # train_model()
     
     # 3. Prédiction sur l'ensemble de test
     predict_and_generate_submission()
