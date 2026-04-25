@@ -350,6 +350,34 @@ def format_plate(raw):
     raw = re.sub(r'([^\d\s]+)(\d+)', r'\1 \2', raw)
     return re.sub(r'\s+', ' ', raw).strip()
 
+def extract_plate_parts(formatted_text):
+    """
+    Sépare le texte formaté en 3 parties: (left_digits, letter_ar, right_digits)
+    """
+    parts = formatted_text.split()
+    left_digits = ""
+    letter_ar = ""
+    right_digits = ""
+    
+    for p in parts:
+        # Si la partie contient au moins un chiffre
+        if re.search(r'\d', p):
+            # Tous les chiffres non arabes sont nettoyés de potentiels caractères parasites
+            clean_digits = ''.join(filter(str.isdigit, p))
+            if not letter_ar:
+                left_digits += clean_digits
+            else:
+                right_digits += clean_digits
+        else:
+            # Concaténer la lettre
+            letter_ar += p
+
+    # Règle de soumission : La lettre arabe doit être fournie comme UN seul caractère
+    if len(letter_ar) > 1:
+        letter_ar = letter_ar[0]
+        
+    return left_digits, letter_ar, right_digits
+
 def predict_and_generate_submission():
     """Exécuter la prédiction sur le dossier de test et générer le fichier CSV."""
     if not os.path.exists(TEST_FOLDER):
@@ -379,11 +407,23 @@ def predict_and_generate_submission():
         final = format_plate(raw)
 
         print(f"✅ {img_name}: '{final}'")
-        resultats.append({"image_name": img_name, "prediction": final})
+        
+        # Extraction selon le nouveau format
+        left, letter, right = extract_plate_parts(final)
+        
+        resultats.append({
+            "image_name": img_name, 
+            "left_digits": left,
+            "letter_ar": letter,
+            "right_digits": right
+        })
 
+    # Sauvegarde au nouveau format requis pour la compétition
     df = pd.DataFrame(resultats)
-    df.to_csv("submission_finale.csv", index=False, encoding='utf-8-sig')
-    print(f"\n🏆 submission_finale.csv sauvegardé!")
+    df = df[["image_name", "left_digits", "letter_ar", "right_digits"]]
+    
+    df.to_csv("submission.csv", index=False, encoding='utf-8-sig')
+    print(f"\n🏆 submission.csv sauvegardé avec succès au format (left_digits, letter_ar, right_digits) !")
     print(df.head().to_string(index=False)) # Affiche seulement les 5 premières lignes
 
 
