@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+venv/
+env/
+.env
+
+# YOLO
+runs/
+datasets/
+yolov8n.pt
+
+# Data directories from main.py
+/content/
+synthetic_chars/
+dataset_maroc/
+dataset_extended/
+sample_data/
+
+# Model outputs
+submission_finale.csv
+
+# Note: best.pt is NOT ignored here so it can be deployed with Streamlit
+# If it becomes too large (>100MB), Git LFS would be needed.
