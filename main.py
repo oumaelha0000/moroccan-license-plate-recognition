@@ -215,6 +215,11 @@ def train_model():
 # ============================================================
 # PARTIE 3 : PRÉDICTION ET POST-TRAITEMENT
 # ============================================================
+# Approche directe : on extrait (left_digits, letter_ar, right_digits)
+# directement depuis les boîtes YOLO triées par position X,
+# sans jamais construire une chaîne intermédiaire qui pourrait
+# subir des inversions RTL/LTR.
+
 def get_label(model, class_id):
     return model.names[int(class_id)].lower()
 
@@ -275,108 +280,104 @@ def split_two_lines(preds):
     bot = sort_by_x([b for b in preds if (b[1]+b[3])/2 >= threshold])
     return top, bot
 
-def boxes_to_string(preds, model):
-    """Convertir les boîtes en chaîne de caractères arabes."""
-    result = ""
-    for b in preds:
-        label = get_label(model, b[5])
-        conf  = b[4]
-        if is_digit(label) and conf >= CONF_DIGIT_MIN:
-            result += label
-        elif is_letter(label) and conf >= CONF_LETTER_MIN:
-            result += DICT_ARABE[label]
-    return result
-
-def build_plate(preds, model):
+def classify_box(box, model):
     """
-    Logique principale :
-    - 1 ligne  → trier par X → lire
-    - 2 lignes → détecter haut/bas → combiner les lettres verticalement
+    Classifie une boîte YOLO en (type, valeur, confiance).
+    type = 'digit' ou 'letter'
+    valeur = le chiffre brut ('6') ou la lettre arabe ('أ')
+    """
+    label = get_label(model, box[5])
+    conf  = box[4]
+
+    if is_digit(label) and conf >= CONF_DIGIT_MIN:
+        return ('digit', label, conf)
+    elif is_letter(label) and conf >= CONF_LETTER_MIN:
+        return ('letter', DICT_ARABE[label], conf)
+    else:
+        return (None, None, conf)
+
+def extract_plate_structured(preds, model):
+    """
+    Extraction DIRECTE de (left_digits, letter_ar, right_digits)
+    depuis les prédictions YOLO, sans passer par une chaîne intermédiaire.
+
+    Logique :
+    1. Trier toutes les boîtes par position X (gauche → droite)
+    2. Fusionner les boîtes proches
+    3. Parcourir : tous les chiffres avant la 1ère lettre = left_digits
+                   la 1ère lettre rencontrée          = letter_ar
+                   tous les chiffres après la lettre   = right_digits
+    
+    Pour les plaques 2 lignes (moto) : on aplatit les 2 lignes
+    en une seule séquence logique.
     """
     if not preds:
-        return ""
+        return "", "", ""
 
     layout = detect_layout(preds)
 
     if layout == 'single':
-        preds = merge_close_boxes(sort_by_x(preds))
-        return boxes_to_string(preds, model)
+        # Plaque standard 1 ligne : trier par X
+        ordered = merge_close_boxes(sort_by_x(preds))
+        return _boxes_to_parts(ordered, model)
 
-    else:  # double — plaque de moto
+    else:
+        # Plaque moto 2 lignes : fusionner intelligemment
         top, bot = split_two_lines(preds)
+        top = merge_close_boxes(top)
+        bot = merge_close_boxes(bot)
 
-        # Chiffres = ligne principale (avec le plus grand nombre de chiffres)
-        top_str = boxes_to_string(merge_close_boxes(top), model)
-        bot_str = boxes_to_string(merge_close_boxes(bot), model)
+        # Extraire les parties de chaque ligne
+        top_parts = _boxes_to_parts(top, model)
+        bot_parts = _boxes_to_parts(bot, model)
 
-        # Trouver les chiffres et lettres dans chaque ligne
-        top_digits  = re.findall(r'\d+', top_str)
-        top_letters = re.findall(r'[^\d\s]+', top_str)
-        bot_digits  = re.findall(r'\d+', bot_str)
-        bot_letters = re.findall(r'[^\d\s]+', bot_str)
+        # Fusionner les résultats des 2 lignes
+        # La ligne avec le plus de chiffres à gauche = numéro principal
+        all_left   = top_parts[0] + bot_parts[0]
+        all_letter = top_parts[1] or bot_parts[1]
+        all_right  = top_parts[2] + bot_parts[2]
 
-        all_digits  = top_digits + bot_digits
-        all_letters = top_letters + bot_letters
+        # Si les deux lignes ont des chiffres des deux côtés,
+        # le bloc le plus long = left, le plus court = right
+        if all_left and all_right:
+            if len(all_left) < len(all_right):
+                all_left, all_right = all_right, all_left
 
-        # Combiner les lettres (ex: و + ع = وع)
-        combined_letter = ''.join(all_letters)
+        return all_left, all_letter, all_right
 
-        # Reconstruire : CHIFFRES_PRINCIPAUX LETTRE(S) CHIFFRES_SUFFIXES
-        # Logique : plus de chiffres = numéro principal, moins de chiffres = suffixe
-        if len(all_digits) >= 2:
-            # Trier les chiffres par longueur décroissante — le plus long = numéro principal
-            all_digits_sorted = sorted(all_digits, key=len, reverse=True)
-            main_num   = all_digits_sorted[0]
-            suffix_num = all_digits_sorted[1] if len(all_digits_sorted) > 1 else ''
-        elif len(all_digits) == 1:
-            main_num   = all_digits[0]
-            suffix_num = ''
-        else:
-            main_num   = ''
-            suffix_num = ''
-
-        if suffix_num:
-            return f"{main_num} {combined_letter} {suffix_num}"
-        elif main_num:
-            return f"{main_num} {combined_letter}"
-        else:
-            return combined_letter
-
-def format_plate(raw):
-    """Nettoyage final de la plaque."""
-    raw = raw.strip()
-    # S'assurer qu'il y a des espaces autour des lettres arabes
-    raw = re.sub(r'(\d+)([^\d\s]+)', r'\1 \2', raw)
-    raw = re.sub(r'([^\d\s]+)(\d+)', r'\1 \2', raw)
-    return re.sub(r'\s+', ' ', raw).strip()
-
-def extract_plate_parts(formatted_text):
+def _boxes_to_parts(ordered_boxes, model):
     """
-    Sépare le texte formaté en 3 parties: (left_digits, letter_ar, right_digits)
+    Convertit une liste ordonnée de boîtes en (left_digits, letter_ar, right_digits).
+    Parcourt de gauche à droite :
+      - Accumule les chiffres dans left_digits tant qu'on n'a pas vu de lettre
+      - Capture la première lettre dans letter_ar
+      - Accumule les chiffres restants dans right_digits
     """
-    parts = formatted_text.split()
-    left_digits = ""
-    letter_ar = ""
+    left_digits  = ""
+    letter_ar    = ""
     right_digits = ""
-    
-    for p in parts:
-        # Si la partie contient au moins un chiffre
-        if re.search(r'\d', p):
-            # Tous les chiffres non arabes sont nettoyés de potentiels caractères parasites
-            clean_digits = ''.join(filter(str.isdigit, p))
-            if not letter_ar:
-                left_digits += clean_digits
-            else:
-                right_digits += clean_digits
-        else:
-            # Concaténer la lettre
-            letter_ar += p
+    found_letter = False
 
-    # Règle de soumission : La lettre arabe doit être fournie comme UN seul caractère
-    if len(letter_ar) > 1:
-        letter_ar = letter_ar[0]
-        
+    for box in ordered_boxes:
+        btype, bval, _ = classify_box(box, model)
+
+        if btype == 'digit':
+            if not found_letter:
+                left_digits += bval
+            else:
+                right_digits += bval
+        elif btype == 'letter':
+            if not found_letter:
+                letter_ar = bval  # Prendre UN seul caractère (règle de soumission)
+                found_letter = True
+            # Ignorer les lettres supplémentaires (la compétition demande 1 seul caractère)
+
     return left_digits, letter_ar, right_digits
+
+def build_plate_display(left, letter, right):
+    """Construire une chaîne d'affichage visuel à partir des 3 parties."""
+    parts = [p for p in [left, letter, right] if p]
+    return " ".join(parts)
 
 def predict_and_generate_submission():
     """Exécuter la prédiction sur le dossier de test et générer le fichier CSV."""
@@ -403,13 +404,11 @@ def predict_and_generate_submission():
         results = model_best(path, verbose=False, conf=0.25)
         preds   = results[0].boxes.data.tolist()
 
-        raw   = build_plate(preds, model_best)
-        final = format_plate(raw)
+        # Extraction directe depuis les boîtes YOLO (pas de string intermédiaire)
+        left, letter, right = extract_plate_structured(preds, model_best)
+        display = build_plate_display(left, letter, right)
 
-        print(f"✅ {img_name}: '{final}'")
-        
-        # Extraction selon le nouveau format
-        left, letter, right = extract_plate_parts(final)
+        print(f"✅ {img_name}: left={left} | letter={letter} | right={right}  →  '{display}'")
         
         resultats.append({
             "image_name": img_name, 
