@@ -151,7 +151,7 @@ def main():
             if image.mode != 'RGB':
                 image = image.convert('RGB')
             # Affichage de l'image de base
-            st.image(image, use_column_width=True, caption="Image source déposée")
+            st.image(image, use_container_width=True, caption="Image source déposée")
             analyze_button = st.button("Lancer l'analyse par l'IA", use_container_width=True, type="primary")
 
     if uploaded_file is not None and analyze_button:
@@ -189,10 +189,11 @@ def main():
                     """, unsafe_allow_html=True)
                     
                     # Preview global
+                    # Affichage explicite de left, letter, right pour respecter l'ordre physique LTR marocain
                     st.markdown(f"""
                     <div class="plate-box">
                         <div class="metric-label" style="margin-bottom:-5px;">Format visuel complet</div>
-                        <p class="plate-text" dir="rtl">{final_text}</p>
+                        <p class="plate-text" dir="ltr">{left if left else ""} {letter if letter else ""} {right if right else ""}</p>
                     </div>
                     """, unsafe_allow_html=True)
 
@@ -200,7 +201,7 @@ def main():
                     res_image_bgr = results[0].plot()
                     res_image_rgb = res_image_bgr[..., ::-1]
                     
-                    st.image(res_image_rgb, use_column_width=True, caption="Vision par ordinateur (Bounding boxes)")
+                    st.image(res_image_rgb, use_container_width=True, caption="Vision par ordinateur (Bounding boxes)")
                     st.balloons()
                 else:
                     st.error("Aucune plaque détectée avec suffisamment de confiance sur cette image.")
